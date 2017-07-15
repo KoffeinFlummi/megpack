@@ -1,0 +1,142 @@
+#!/usr/bin/env python3
+
+"""
+megpack
+
+Usage:
+    megpack pack [-f] <sourcefolder> <targetfile>
+    megpack unpack [-f] <sourcefile> <targetfolder>
+    megpack (-h | --help)
+    megpack (-v | --version)
+
+Commands:
+    pack    Pack the contents of a folder into a .meg file
+    unpack  Unpack a .meg file into a folder
+
+Options:
+    -f --force      Overwrite files that already exist.
+    -h --help       Show usage information and exit.
+    -v --version    Print the version number and exit.
+"""
+
+
+import os
+import sys
+import glob
+import zlib
+import struct
+
+import docopt
+
+
+VERSION = "v1.0"
+
+
+def pack(source, target):
+    if os.path.isdir(target):
+        print("Error: Target is a folder.")
+        return 1
+    if os.path.exists(target) and not args["--force"]:
+        print("Error: {} already exists.".format(target))
+        return 1
+
+    if source[-1] == "/":
+        source = source[:-1]
+    files = glob.glob(source + "/**/*", recursive=True)
+    files = [x for x in files if os.path.isfile(x)]
+    files = [os.path.sep.join(x.split(os.path.sep)[1:]) for x in files]
+
+    with open(target, "wb") as f:
+        f.write(struct.pack("<L", len(files)))
+        f.write(struct.pack("<L", len(files)))
+
+        for i, name in enumerate(files):
+            f.write(struct.pack("<H", len(name)))
+            f.write(bytes(name.replace(os.path.sep, "\\"), "utf-8"))
+
+        filetableoffset = f.tell()
+
+        for i, name in enumerate(files):
+            crc32 = zlib.crc32(bytes(name.replace(os.path.sep, "\\"), "utf-8"))
+
+            f.write(struct.pack("<L", crc32))
+            f.write(struct.pack("<L", i))
+            f.write(struct.pack("<L", 0))
+            f.write(struct.pack("<L", 0))
+            f.write(struct.pack("<L", i))
+
+        for i, name in enumerate(files):
+            with open(os.path.join(source, name), "rb") as g:
+                content = g.read()
+
+            start = f.tell()
+            f.write(content)
+
+            f.seek(filetableoffset + i * 20 + 8)
+            f.write(struct.pack("<L", len(content)))
+            f.write(struct.pack("<L", start))
+            f.seek(0, 2)
+
+    return 0
+
+
+def unpack(source, target):
+    if not os.path.exists(target):
+        os.mkdir(target)
+    if not os.path.isdir(target):
+        print("Error: Target is not a folder.")
+        return 1
+
+    with open(source, "rb") as f:
+        data = f.read()
+
+    num_files = struct.unpack("<L", data[0:4])[0]
+    filenames = []
+    files = {}
+
+    offset = 8
+    for i in range(num_files):
+        l = struct.unpack("<H", data[offset:offset+2])[0]
+        name = str(data[offset+2:offset+2+l], "utf-8")
+        filenames.append(name)
+        offset += l + 2
+
+    for i in range(num_files):
+        size = struct.unpack("<L", data[offset+8:offset+12])[0]
+        start = struct.unpack("<L", data[offset+12:offset+16])[0]
+        index = struct.unpack("<L", data[offset+16:offset+20])[0]
+        files[filenames[index]] = data[start:start+size]
+        offset += 20
+        
+    for path, content in files.items():
+        path = path.replace("\\", os.path.sep)
+        path = os.path.join(target, path)
+
+        folder = os.path.sep.join(path.split(os.path.sep)[:-1])
+        os.makedirs(folder, exist_ok=True)
+
+        if os.path.exists(path) and not args["--force"]:
+            print("Error: {} already exists.".format(path))
+            return 1
+        
+        with open(path, "wb") as f:
+            f.write(content)
+
+    return 0
+
+
+def main(args):
+    if args["pack"]:
+        return pack(args["<sourcefolder>"], args["<targetfile>"])
+    
+    if args["unpack"]:
+        return unpack(args["<sourcefile>"], args["<targetfolder>"])
+
+    return 0
+
+
+if __name__ == "__main__":
+    global args
+
+    args = docopt.docopt(__doc__, version=VERSION)
+    sys.exit(main(args))
