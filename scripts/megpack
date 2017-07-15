@@ -43,10 +43,10 @@ def pack(source, target):
     if source[-1] == "/":
         source = source[:-1]
     files = glob.glob(source + "/**/*", recursive=True)
-    files = [x for x in files if os.path.isfile(x)]
-    files = [os.path.sep.join(x.split(os.path.sep)[1:]) for x in files]
+    files = [x[len(source)+1:] for x in files if os.path.isfile(x)]
 
     with open(target, "wb") as f:
+        f.truncate()
         f.write(struct.pack("<L", len(files)))
         f.write(struct.pack("<L", len(files)))
 
@@ -56,26 +56,34 @@ def pack(source, target):
 
         filetableoffset = f.tell()
 
-        for i, name in enumerate(files):
-            crc32 = zlib.crc32(bytes(name.replace(os.path.sep, "\\"), "utf-8"))
+        crcs = [zlib.crc32(bytes(x.replace(os.path.sep, "\\"), "utf-8")) for x in files]
+        files_sorted = sorted(files, key=lambda x: crcs[files.index(x)])
+        crcs.sort()
 
-            f.write(struct.pack("<L", crc32))
+        for i, name in enumerate(files_sorted):
+            f.write(struct.pack("<L", crcs[i]))
             f.write(struct.pack("<L", i))
             f.write(struct.pack("<L", 0))
             f.write(struct.pack("<L", 0))
-            f.write(struct.pack("<L", i))
+            f.write(struct.pack("<L", files.index(name)))
 
-        for i, name in enumerate(files):
+        contentsum = 0
+
+        for i, name in enumerate(files_sorted):
             with open(os.path.join(source, name), "rb") as g:
                 content = g.read()
 
             start = f.tell()
             f.write(content)
 
-            f.seek(filetableoffset + i * 20 + 8)
+            contentsum += len(content)
+
+            f.seek(filetableoffset + i * 20 + 8, 0)
             f.write(struct.pack("<L", len(content)))
             f.write(struct.pack("<L", start))
             f.seek(0, 2)
+
+        f.write(b"\n")
 
     return 0
 
@@ -107,7 +115,7 @@ def unpack(source, target):
         index = struct.unpack("<L", data[offset+16:offset+20])[0]
         files[filenames[index]] = data[start:start+size]
         offset += 20
-        
+
     for path, content in files.items():
         path = path.replace("\\", os.path.sep)
         path = os.path.join(target, path)
@@ -120,6 +128,7 @@ def unpack(source, target):
             return 1
         
         with open(path, "wb") as f:
+            f.truncate()
             f.write(content)
 
     return 0
