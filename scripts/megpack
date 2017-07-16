@@ -67,16 +67,12 @@ def pack(source, target):
             f.write(struct.pack("<L", 0))
             f.write(struct.pack("<L", files.index(name)))
 
-        contentsum = 0
-
         for i, name in enumerate(files_sorted):
             with open(os.path.join(source, name), "rb") as g:
                 content = g.read()
 
             start = f.tell()
             f.write(content)
-
-            contentsum += len(content)
 
             f.seek(filetableoffset + i * 20 + 8, 0)
             f.write(struct.pack("<L", len(content)))
